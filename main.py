@@ -170,7 +170,7 @@ class SearchWorker(QObject):
 class ExportWorker(QObject):
     """댓글 수집 작업을 위한 스레드"""
     # 시그널 정의
-    start_export = Signal(list)
+    start_export = Signal(list, dict)
     export_started = Signal(str)
     export_progress = Signal(str)
     export_finished = Signal(dict)
@@ -181,20 +181,27 @@ class ExportWorker(QObject):
         self.start_export.connect(self.run_export) 
     
     @Slot(list)
-    def run_export(self, urls):
+    def run_export(self, urls, options):
         """댓글 수집 작업 실행"""
         try:
+            # 날짜 필터 정보 가져오기
+            start_date = datetime.strptime(options['start_date'], "%Y-%m-%d").timestamp()
+            end_date = datetime.strptime(options['end_date'], "%Y-%m-%d").timestamp()
+            
             self.export_started.emit(f"댓글 수집 시작: {len(urls)}개 URL")
             results = []
             for i, url in enumerate(urls):
                 self.export_progress.emit(f"댓글 수집 중: {i+1}/{len(urls)} - {url}")
                 try:
+                    # 날짜 필터 옵션 추가
                     guid, data = process_url(url)
-                    results.append({
-                        'url': url,
-                        'guid': guid,
-                        'data': data
-                    })
+                    filtered_data = list(filter(lambda x: start_date <= int(x['time']) and end_date >= int(x['time']), data))
+                    results.extend(filtered_data)
+                    # results.append({
+                    #     'url': url,
+                    #     'guid': guid,
+                    #     'data': data
+                    # })
                 except Exception as e:
                     self.export_progress.emit(f"오류: {url} - {str(e)}")
                     results.append({
@@ -569,8 +576,8 @@ class MainWindow(QMainWindow):
             self.reset_button_state()
             return
             
-        start_date = self.start_date.date().toString("yyyy-MM-dd")
-        end_date = self.end_date.date().toString("yyyy-MM-dd")
+        # start_date = self.start_date.date().toString("yyyy-MM-dd")
+        # end_date = self.end_date.date().toString("yyyy-MM-dd")
         
         # 스펙 데이터 수집
         spec_data = {}
@@ -692,6 +699,12 @@ class MainWindow(QMainWindow):
         self.status_label.setText("댓글 수집 중. ..")
         self.status_label.setStyleSheet("color: #2563eb;")
         self.download_button.hide()
+
+        # options
+        options = {
+            "start_date" : self.start_date.date().toString("yyyy-MM-dd"),
+            "end_date": self.end_date.date().toString("yyyy-MM-dd")
+        }
         
         # 검색 결과 URL 사용
         urls = []
@@ -711,7 +724,7 @@ class MainWindow(QMainWindow):
         self.create_export_worker()
         self.export_worker.moveToThread(self.export_thread)
         self.export_thread.started.connect(
-            lambda: self.export_worker.start_export.emit(urls)
+            lambda: self.export_worker.start_export.emit(urls, options)
         )
         self.export_worker.export_finished.connect(self.export_thread.quit)
         self.export_worker.export_finished.connect(self.export_worker.deleteLater)
