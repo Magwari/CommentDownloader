@@ -2,7 +2,7 @@ import sys
 import os
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QDateEdit, QCheckBox,
-                             QGroupBox, QGridLayout, QFormLayout, QLineEdit, QScrollArea, QListWidget)
+                             QGroupBox, QGridLayout, QFormLayout, QLineEdit, QScrollArea, QListWidget, QFrame)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import Qt, QDate, QThread, Signal, QUrl, QObject, Slot
 from PySide6.QtGui import QPalette, QFont
@@ -129,6 +129,12 @@ QTextEdit#LogArea {
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 12px;
     padding: 10px;
+}
+/* 검색 결과 URL 항목 */
+QLabel#SearchResultUrl {
+    background-color: white;
+    padding: 5px;
+    border-radius: 4px;
 }
 """
 
@@ -400,6 +406,31 @@ class MainWindow(QMainWindow):
         spec_group.setLayout(spec_layout)
         form_layout.addWidget(spec_group)
         
+        # 검색 대상 URL 섹션
+        search_url_group = QGroupBox("🔍 검색 대상 URL")
+        search_url_layout = QVBoxLayout()
+        search_url_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # 검색 결과 리스트
+        self.search_results_list_container = QVBoxLayout()
+        self.search_results_list_container.setSpacing(5)
+        self.search_results_list_container.setContentsMargins(0, 0, 0, 0)
+        search_url_layout.addLayout(self.search_results_list_container)
+        
+        # 검색 대상 추가 입력창
+        self.search_input_layout = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("검색 대상 URL 입력")
+        self.add_search_button = QPushButton("추가")
+        self.add_search_button.clicked.connect(self.add_search_url)
+        self.search_input_layout.addWidget(self.search_input)
+        self.search_input_layout.addWidget(self.add_search_button)
+        search_url_layout.addLayout(self.search_input_layout)
+        
+        search_url_group.setLayout(search_url_layout)
+        form_layout.addWidget(search_url_group)
+        
+        
         # 제출 버튼
         self.submit_button = QPushButton("URL 검색 시작하기")
         self.submit_button.clicked.connect(self.submit_form)
@@ -428,10 +459,8 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.log_text)
         
         # 검색 결과 표시 영역
-        self.search_results_widget = QListWidget()
-        self.search_results_widget.setVisible(False)
-        right_layout.addWidget(QLabel("🔍 검색 결과:"))
-        right_layout.addWidget(self.search_results_widget)
+        # 기존의 검색 결과 리스트는 제거하고, 새로운 리스트만 사용
+        # 검색 결과 표시 영역은 더 이상 필요 없음
         
         # 수집 시작 버튼
         self.export_button = QPushButton("댓글 수집 시작")
@@ -510,6 +539,11 @@ class MainWindow(QMainWindow):
                 widget.setParent(None)
         layout.setParent(None)
         
+    def remove_search_result_item(self, item_widget):
+        """검색 결과 항목 삭제"""
+        self.search_results_list_container.removeWidget(item_widget)
+        item_widget.deleteLater()
+        
     def submit_form(self):
         """폼 제출 처리"""
         # 버튼 비활성화
@@ -522,8 +556,7 @@ class MainWindow(QMainWindow):
         self.status_label.setStyleSheet("color: #2563eb;")
         self.download_button.hide()
         self.export_button.hide()
-        self.search_results_widget.clear()
-        self.search_results_widget.setVisible(False)
+        self.clear_search_results_list()
         
         # 입력값 수집
         selected_media = []
@@ -652,20 +685,25 @@ class MainWindow(QMainWindow):
         """댓글 수집 시작"""
         # 버튼 비활성화
         self.export_button.setEnabled(False)
-        self.export_button.setText("댓글 수집 중...")
+        self.export_button.setText("댓글 수집 중. ..")
         
         # 로그 초기화
         self.log_text.clear()
-        self.status_label.setText("댓글 수집 중...")
+        self.status_label.setText("댓글 수집 중. ..")
         self.status_label.setStyleSheet("color: #2563eb;")
         self.download_button.hide()
         
         # 검색 결과 URL 사용
         urls = []
-        for i in range(self.search_results_widget.count()):
-            item = self.search_results_widget.item(i)
-            urls.append(item.text())
-            
+        for i in range(self.search_results_list_container.count()):
+            widget = self.search_results_list_container.itemAt(i).widget()
+            if widget:
+                # 위젯 내부의 QLabel에서 URL 추출
+                for j in range(widget.layout().count()):
+                    item = widget.layout().itemAt(j)
+                    if isinstance(item.widget(), QLabel):
+                        urls.append(item.widget().text())
+                        break
         self.add_log(f"댓글 수집 시작: {len(urls)}개 URL", "info")
         
         # 댓글 수집 작업 시작
@@ -689,14 +727,15 @@ class MainWindow(QMainWindow):
     def on_search_finished(self, results):
         self.add_log(f"검색 완료: {len(results)}개 결과", "success")
         # 검색 결과 표시
-        self.search_results_widget.clear()
+        self.clear_search_results_list()
         for url in results:
-            self.search_results_widget.addItem(url)
-        self.search_results_widget.setVisible(True)
+            self.add_search_result_item(url)
         # 수집 시작 버튼 표시
         self.export_button.show()
         self.export_button.setEnabled(True)
         self.export_button.setText("댓글 수집 시작")
+        # 검색 완료 후 버튼 상태 초기화
+        self.reset_button_state()
         
     def on_export_started(self, message):
         self.add_log(message, "warn")
@@ -767,6 +806,55 @@ class MainWindow(QMainWindow):
         """버튼 상태 초기화"""
         self.submit_button.setEnabled(True)
         self.submit_button.setText("URL 검색 시작하기")
+        
+    def add_search_url(self):
+        """검색 URL 추가"""
+        url = self.search_input.text().strip()
+        if url:
+            self.add_search_result_item(url)
+            self.search_input.clear()
+            
+    def add_search_result_item(self, url):
+        """검색 결과 항목 추가 (사용자 정의 위젯)"""
+        # 항목 컨테이너 위젯 생성
+        item_widget = QWidget()
+        item_layout = QHBoxLayout(item_widget)
+        item_layout.setContentsMargins(5, 5, 5, 5)
+        item_layout.setSpacing(5)
+        
+        # URL 라벨
+        url_label = QLabel(url)
+        url_label.setWordWrap(True)
+        url_label.setMinimumWidth(300)
+        url_label.setObjectName("SearchResultUrl")
+        item_layout.addWidget(url_label)
+        
+        # 삭제 버튼
+        remove_button = QPushButton("×")
+        remove_button.setFixedSize(25, 25)
+        remove_button.clicked.connect(lambda: self.remove_search_result_item(item_widget))
+        item_layout.addWidget(remove_button)
+        
+        # 항목을 컨테이너에 추가
+        self.search_results_list_container.addWidget(item_widget)
+        
+    def remove_search_result_item(self, item_widget):
+        """검색 결과 항목 삭제"""
+        self.search_results_list_container.removeWidget(item_widget)
+        item_widget.deleteLater()
+        
+    def clear_search_results_list(self):
+        """검색 결과 리스트 초기화"""
+        for i in reversed(range(self.search_results_list_container.count())):
+            widget = self.search_results_list_container.itemAt(i).widget()
+            if widget:
+                self.search_results_list_container.removeWidget(widget)
+                widget.deleteLater()
+                
+    def show_search_result_context_menu(self, position):
+        """검색 결과 리스트 컨텍스트 메뉴 표시"""
+        # 기존의 컨텍스트 메뉴는 제거하고, 사용자 정의 위젯의 삭제 기능을 사용
+        pass
 
 def main():
     app = QApplication(sys.argv)
