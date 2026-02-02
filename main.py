@@ -2,7 +2,7 @@ import sys
 import os
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QTextEdit, QComboBox, QDateEdit, QCheckBox,
-                             QGroupBox, QGridLayout, QFormLayout, QLineEdit, QScrollArea)
+                             QGroupBox, QGridLayout, QFormLayout, QLineEdit, QScrollArea, QListWidget)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import Qt, QDate, QThread, Signal, QUrl, QObject, Slot
 from PySide6.QtGui import QPalette, QFont
@@ -132,21 +132,18 @@ QTextEdit#LogArea {
 }
 """
 
-class BackendWorker(QObject):
-    """백엔드 작업을 위한 스레드"""
+class SearchWorker(QObject):
+    """검색 작업을 위한 스레드"""
     # 시그널 정의
+    start_search = Signal(str, list)
     search_started = Signal(str)
     search_progress = Signal(str)
     search_finished = Signal(list)
-    export_started = Signal(str)
-    export_progress = Signal(str)
-    export_finished = Signal(dict)
     error_occurred = Signal(str)
     
     def __init__(self):
         super().__init__()
-        self.search_results = []
-        self.export_results = []
+        self.start_search.connect(self.run_search)
     
     @Slot(str, list)
     def run_search(self, query, sites):
@@ -164,7 +161,20 @@ class BackendWorker(QObject):
         except Exception as e:
             self.error_occurred.emit(f"검색 중 오류 발생: {str(e)}")
 
-    @Slot(str, list)
+class ExportWorker(QObject):
+    """댓글 수집 작업을 위한 스레드"""
+    # 시그널 정의
+    start_export = Signal(list)
+    export_started = Signal(str)
+    export_progress = Signal(str)
+    export_finished = Signal(dict)
+    error_occurred = Signal(str)
+    
+    def __init__(self):
+        super().__init__()
+        self.start_export.connect(self.run_export) 
+    
+    @Slot(list)
     def run_export(self, urls):
         """댓글 수집 작업 실행"""
         try:
@@ -417,6 +427,19 @@ class MainWindow(QMainWindow):
         self.log_text.setStyleSheet("background-color: #1e293b; color: #e2e8f0; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;")
         right_layout.addWidget(self.log_text)
         
+        # 검색 결과 표시 영역
+        self.search_results_widget = QListWidget()
+        self.search_results_widget.setVisible(False)
+        right_layout.addWidget(QLabel("🔍 검색 결과:"))
+        right_layout.addWidget(self.search_results_widget)
+        
+        # 수집 시작 버튼
+        self.export_button = QPushButton("댓글 수집 시작")
+        self.export_button.clicked.connect(self.start_export)
+        self.export_button.hide()
+        self.export_button.setStyleSheet("background-color: #2563eb; color: white; font-size: 14px; padding: 12px; font-weight: bold;")
+        right_layout.addWidget(self.export_button)
+        
         # 다운로드 버튼
         self.download_button = QPushButton("리뷰 수집 파일 다운로드")
         self.download_button.clicked.connect(self.download_results)
@@ -431,20 +454,24 @@ class MainWindow(QMainWindow):
         # 초기 상태 설정
         self.status_label.setText("대기 중")
 
-    def create_worker(self):
-        # 백엔드 작업자 생성
-        self.backend_worker = BackendWorker()
-        self.backend_worker.search_started.connect(self.on_search_started)
-        self.backend_worker.search_progress.connect(self.on_search_progress)
-        self.backend_worker.search_finished.connect(self.on_search_finished)
-        self.backend_worker.search_finished.connect(self.backend_worker.run_export)
-        self.backend_worker.export_started.connect(self.on_export_started)
-        self.backend_worker.export_progress.connect(self.on_export_progress)
-        self.backend_worker.export_finished.connect(self.on_export_finished)
-        self.backend_worker.error_occurred.connect(self.on_error)
+    def create_search_worker(self):
+        # 검색 작업자 생성
+        self.search_worker = SearchWorker()
+        self.search_worker.search_started.connect(self.on_search_started)
+        self.search_worker.search_progress.connect(self.on_search_progress)
+        self.search_worker.search_finished.connect(self.on_search_finished)
+        self.search_worker.error_occurred.connect(self.on_error)
         
-        # run_export가 완료된 후 버튼을 다시 활성화
-        self.backend_worker.export_finished.connect(self.reset_button_state)
+    def create_export_worker(self):
+        # 댓글 수집 작업자 생성
+        self.export_worker = ExportWorker()
+        self.export_worker.export_started.connect(self.on_export_started)
+        self.export_worker.export_progress.connect(self.on_export_progress)
+        self.export_worker.export_finished.connect(self.on_export_finished)
+        self.export_worker.error_occurred.connect(self.on_error)
+        
+        # 댓글 수집 완료 후 버튼을 다시 활성화
+        self.export_worker.export_finished.connect(self.reset_button_state)
         
     def toggle_product_type_input(self, text):
         self.product_type_input.setEnabled(text == "custom")
@@ -494,6 +521,9 @@ class MainWindow(QMainWindow):
         self.status_label.setText("처리 중...")
         self.status_label.setStyleSheet("color: #2563eb;")
         self.download_button.hide()
+        self.export_button.hide()
+        self.search_results_widget.clear()
+        self.search_results_widget.setVisible(False)
         
         # 입력값 수집
         selected_media = []
@@ -605,18 +635,50 @@ class MainWindow(QMainWindow):
         self.add_log(f"검색 쿼리: {keyword_query}", "info")
         self.add_log(f"대상 사이트: {', '.join(site_list)}", "info")
         
-        # 백엔드 작업 시작
-        # 백엔드 작업을 별도의 스레드에서 실행하여 UI가 freeze되지 않도록 함
-        self.thread = QThread()
-        self.create_worker()
-        self.backend_worker.moveToThread(self.thread)
-        self.thread.started.connect(
-            lambda: self.backend_worker.run_search(keyword_query, site_list)
+        # 검색 작업 시작
+        # 검색 작업을 별도의 스레드에서 실행하여 UI가 freeze되지 않도록 함
+        self.search_thread = QThread()
+        self.create_search_worker()
+        self.search_worker.moveToThread(self.search_thread)
+        self.search_thread.started.connect(
+            lambda: self.search_worker.start_search.emit(keyword_query, site_list)
         )
-        self.backend_worker.export_finished.connect(self.backend_worker.deleteLater)
-        self.backend_worker.export_finished.connect(self.thread.quit)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
+        self.search_worker.search_finished.connect(self.search_thread.quit)
+        self.search_worker.search_finished.connect(self.search_worker.deleteLater)
+        self.search_thread.finished.connect(self.search_thread.deleteLater)
+        self.search_thread.start()
+        
+    def start_export(self):
+        """댓글 수집 시작"""
+        # 버튼 비활성화
+        self.export_button.setEnabled(False)
+        self.export_button.setText("댓글 수집 중...")
+        
+        # 로그 초기화
+        self.log_text.clear()
+        self.status_label.setText("댓글 수집 중...")
+        self.status_label.setStyleSheet("color: #2563eb;")
+        self.download_button.hide()
+        
+        # 검색 결과 URL 사용
+        urls = []
+        for i in range(self.search_results_widget.count()):
+            item = self.search_results_widget.item(i)
+            urls.append(item.text())
+            
+        self.add_log(f"댓글 수집 시작: {len(urls)}개 URL", "info")
+        
+        # 댓글 수집 작업 시작
+        self.export_thread = QThread()
+        self.create_export_worker()
+        self.export_worker.moveToThread(self.export_thread)
+        self.export_thread.started.connect(
+            lambda: self.export_worker.start_export.emit(urls)
+        )
+        self.export_worker.export_finished.connect(self.export_thread.quit)
+        self.export_worker.export_finished.connect(self.export_worker.deleteLater)
+        self.export_thread.finished.connect(self.export_thread.deleteLater)
+        self.export_thread.start()
 
     def on_search_started(self, message):
         self.add_log(message, "success")
@@ -626,9 +688,15 @@ class MainWindow(QMainWindow):
         
     def on_search_finished(self, results):
         self.add_log(f"검색 완료: {len(results)}개 결과", "success")
-        # # 검색 결과를 기반으로 댓글 수집 시작
-        # urls = [item['link'] for item in results]
-        # self.backend_worker.run_export(urls)
+        # 검색 결과 표시
+        self.search_results_widget.clear()
+        for url in results:
+            self.search_results_widget.addItem(url)
+        self.search_results_widget.setVisible(True)
+        # 수집 시작 버튼 표시
+        self.export_button.show()
+        self.export_button.setEnabled(True)
+        self.export_button.setText("댓글 수집 시작")
         
     def on_export_started(self, message):
         self.add_log(message, "warn")
