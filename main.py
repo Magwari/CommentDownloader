@@ -159,7 +159,7 @@ class SearchWorker(QObject):
             results = []
             for site in sites:
                 googleSearchId = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{datetime.now()}_{site}_{query}"))
-                site_results = google_search(query, googleSearchId, site, max_search_num=10)
+                site_results = google_search(query, googleSearchId, site, max_search_num=100)
                 results.extend(site_results)
                 self.search_progress.emit(f"사이트 {site} 검색 완료: {len(site_results)}개 결과")
             
@@ -194,7 +194,10 @@ class ExportWorker(QObject):
                 self.export_progress.emit(f"댓글 수집 중: {i+1}/{len(urls)} - {url}")
                 try:
                     # 날짜 필터 옵션 추가
-                    guid, data = process_url(url)
+                    guid, status, data = process_url(url)
+                    if status == "error":
+                        raise Exception("Error Response from ExportComments. ")
+                    assert status == "done"
                     filtered_data = list(filter(lambda x: start_date <= int(x['time']) and end_date >= int(x['time']), data))
                     results.extend(filtered_data)
                     # results.append({
@@ -204,10 +207,10 @@ class ExportWorker(QObject):
                     # })
                 except Exception as e:
                     self.export_progress.emit(f"오류: {url} - {str(e)}")
-                    results.append({
-                        'url': url,
-                        'error': str(e)
-                    })
+                    # results.append({
+                    #     'url': url,
+                    #     'error': str(e)
+                    # })
             
             self.export_finished.emit({'results': results})
         except Exception as e:
@@ -251,14 +254,14 @@ class MainWindow(QMainWindow):
         media_group = QGroupBox("Media (플랫폼 선택)")
         media_layout = QHBoxLayout()
         self.media_checkboxes = []
-        platforms = ["BestBuy", "Walmart", "Amazon", "Reddit"]
+        platforms = ["BestBuy", "Walmart", "Youtube", "Reddit"]
         for platform in platforms:
             checkbox = QCheckBox(platform)
             # Walmart과 Amazon은 선택 불가능하도록 비활성화
-            if platform in ["Walmart", "Amazon"]:
-                checkbox.setEnabled(False)
-                # 비활성화된 체크박스의 텍스트 색상 변경
-                checkbox.setStyleSheet("color: #94a3b8;")
+            # if platform in ["Walmart", "Amazon"]:
+            #     checkbox.setEnabled(False)
+            #     # 비활성화된 체크박스의 텍스트 색상 변경
+            #     checkbox.setStyleSheet("color: #94a3b8;")
             self.media_checkboxes.append(checkbox)
             media_layout.addWidget(checkbox)
         media_group.setLayout(media_layout)

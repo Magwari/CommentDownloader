@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import logging
+import re
 
 import httpx
 import dotenv
@@ -24,6 +25,7 @@ API_KEY = "YOUR_API_KEY"  # 필요시 인증키
 
 def create_exportcomments_task(url):
     print(f"Creating exportcomments job of {url}...", flush=True)
+
     tries = 0
     while tries < 5:
         with httpx.Client(verify=False) as client:
@@ -58,6 +60,8 @@ def create_exportcomments_task(url):
                 print("Current Status: ", status.get("status"), flush=True)
                 if status.get("status") == "done":
                     return status
+                if status.get("status") == "error":
+                    return status
                 time.sleep(10)
             
 def check_export(guid: str):
@@ -77,12 +81,25 @@ def download_json(json_url: str):
     return resp.json()
 
 def process_url(url,options=None):
-    # 1. export 생성
+    # 1. warmart 전처리
+    if "www.walmart.com" in url:
+        if match_result := re.search("www.walmart.com/ip/.*/(\d+)", url):
+            product_id = match_result.groups()[0]
+            url=f"https://www.walmart.com/reviews/product/{product_id}"
+        else:
+            return None, []
+    # 2. export 생성
+    # print(url)
     res = create_exportcomments_task(url)
     guid = res.get("guid") or res.get("id")
-    json_url = res.get("json_url")
-    json_data = download_json(json_url)
-    return guid, json_data
+    status = res.get("status")
+    if status == "done":
+        json_url = res.get("json_url")
+        json_data = download_json(json_url)
+        return guid, status, json_data
+    else:
+        return guid, status, []
+        
 
 if __name__ == "__main__":
     url_file = sys.argv[1]

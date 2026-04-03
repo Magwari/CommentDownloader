@@ -22,8 +22,9 @@ logger=logging.getLogger(__name__)
 #platform url
 platform_urls = {
     "BestBuy": "www.bestbuy.com",
+    "Youtube": "www.youtube.com",
     "Walmart": "www.walmart.com",
-    "Amazon": "www.amazon.com",
+    #"Amazon": "www.amazon.com",
     "Reddit": "www.reddit.com"
 }
 
@@ -35,6 +36,8 @@ def google_search(query: str, googleSearchId: str, site: str, max_search_num: in
         with httpx.Client() as client:
             if site == 'www.bestbuy.com':
                 query = query.replace('intitle', 'inurl')
+            if site == 'www.youtube.com':
+                query = query.replace('intitle', 'intext')
             start = 1
             next_page_exists = True
             total_results = list()
