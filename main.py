@@ -13,6 +13,7 @@ import uuid
 
 from comment_downloader.google_search import google_search
 from comment_downloader.exportcomments import process_url
+from comment_downloader.utils import fetch_url_title
 
 # =============================================================================
 # [스타일 시트] HTML의 CSS를 PyQt 스타일시트(QSS)로 변환
@@ -163,7 +164,13 @@ class SearchWorker(QObject):
                 results.extend(site_results)
                 self.search_progress.emit(f"사이트 {site} 검색 완료: {len(site_results)}개 결과")
             
-            self.search_finished.emit([item['link'] for item in results])
+            result_items = []
+            for item in results:
+                result_items.append({
+                    'title': item.get('title', item['link']),  # title이 없으면 link 사용
+                    'link': item['link']
+                })
+            self.search_finished.emit(result_items)
         except Exception as e:
             self.error_occurred.emit(f"검색 중 오류 발생: {str(e)}")
 
@@ -715,11 +722,13 @@ class MainWindow(QMainWindow):
             widget = self.search_results_list_container.itemAt(i).widget()
             if widget:
                 # 위젯 내부의 QLabel에서 URL 추출
-                for j in range(widget.layout().count()):
-                    item = widget.layout().itemAt(j)
-                    if isinstance(item.widget(), QLabel):
-                        urls.append(item.widget().text())
-                        break
+                # URL은 두 번째 QLabel에 저장되어 있음
+                url_label = None
+                item = widget.layout().itemAt(1)
+                if isinstance(item.widget(), QLabel):
+                    url_label = item.widget()
+                if url_label and not url_label.text() in urls:
+                    urls.append(url_label.text())
         self.add_log(f"댓글 수집 시작: {len(urls)}개 URL", "info")
         
         # 댓글 수집 작업 시작
@@ -744,8 +753,8 @@ class MainWindow(QMainWindow):
         self.add_log(f"검색 완료: {len(results)}개 결과", "success")
         # 검색 결과 표시
         self.clear_search_results_list()
-        for url in results:
-            self.add_search_result_item(url)
+        for item in results:
+            self.add_search_result_item(item['title'], item['link'])
         # 수집 시작 버튼 표시
         self.export_button.show()
         self.export_button.setEnabled(True)
@@ -827,10 +836,12 @@ class MainWindow(QMainWindow):
         """검색 URL 추가"""
         url = self.search_input.text().strip()
         if url:
-            self.add_search_result_item(url)
+            # URL에서 제목 가져오기
+            title = fetch_url_title(url)
+            self.add_search_result_item(title, url)
             self.search_input.clear()
             
-    def add_search_result_item(self, url):
+    def add_search_result_item(self, title, url):
         """검색 결과 항목 추가 (사용자 정의 위젯)"""
         # 항목 컨테이너 위젯 생성
         item_widget = QWidget()
@@ -838,18 +849,33 @@ class MainWindow(QMainWindow):
         item_layout.setContentsMargins(5, 5, 5, 5)
         item_layout.setSpacing(5)
         
-        # URL 라벨
+        # 제목 라벨 (우선 표시)
+        if title:
+            title_label = QLabel(title)
+            title_label.setWordWrap(True)
+            title_label.setMinimumWidth(300)
+            title_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+            item_layout.addWidget(title_label)
+        else:
+            # 제목이 없을 경우 URL을 제목으로 사용
+            title_label = QLabel(url)
+            title_label.setWordWrap(True)
+            title_label.setMinimumWidth(300)
+            title_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+            item_layout.addWidget(title_label)
+        
+        # URL 라벨 (작은 글씨로 아래에 표시)
         url_label = QLabel(url)
         url_label.setWordWrap(True)
         url_label.setMinimumWidth(300)
-        url_label.setObjectName("SearchResultUrl")
+        url_label.setStyleSheet("font-size: 12px; color: #64748b;")
         item_layout.addWidget(url_label)
         
-        # 삭제 버튼
+        # 삭제 버튼 (오른쪽에 배치)
         remove_button = QPushButton("×")
         remove_button.setFixedSize(25, 25)
         remove_button.clicked.connect(lambda: self.remove_search_result_item(item_widget))
-        item_layout.addWidget(remove_button)
+        item_layout.addWidget(remove_button, alignment=Qt.AlignRight)
         
         # 항목을 컨테이너에 추가
         self.search_results_list_container.addWidget(item_widget)
